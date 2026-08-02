@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devghost/trix-sdk-go/agent"
+	"github.com/trixdb/trix-sdk-go/agent"
 )
 
 // A realistic memory-native turn: retrieval → injection → assistant cites a

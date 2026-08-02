@@ -31,7 +31,7 @@ go test ./examples/retrix-style
 ## Why it's the test for retrix integration
 
 Retrix doesn't live in this repo, but its embedding pattern is identical
-to this example: import `github.com/devghost/trix-sdk-go/agent`, build a
+to this example: import `github.com/trixdb/trix-sdk-go/agent`, build a
 `Client`, call `Query()`, fold the StreamEvents into your own outcome
 type. The integration test covers every interaction surface a retrix-style
 consumer would touch: auth header forwarding, error events, HTTP failures,
