@@ -1,3 +1,3 @@
-module github.com/devghost/trix-sdk-go
+module github.com/trixdb/trix-sdk-go
 
 go 1.22

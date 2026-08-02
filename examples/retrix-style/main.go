@@ -23,7 +23,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/devghost/trix-sdk-go/agent"
+	"github.com/trixdb/trix-sdk-go/agent"
 )
 
 // RunOutcome captures everything a downstream consumer typically needs from
