@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"sync"
+	"time"
 )
 
 // Client is the consumer-facing handle for issuing Query() calls.
@@ -17,6 +21,9 @@ type Client struct {
 	hc      *http.Client
 	apiKey  string
 	bufSize int
+	// initErr holds a configuration error detected in NewClient; it is
+	// returned from the first Query so the constructor keeps one return value.
+	initErr error
 }
 
 // ClientOptions configures a Client.
@@ -25,16 +32,27 @@ type ClientOptions struct {
 	BaseURL string
 	// APIKey is sent as `Authorization: Bearer <key>` if non-empty.
 	APIKey string
-	// HTTPClient overrides the default http.Client.
+	// HTTPClient overrides the default http.Client. When nil, a client with
+	// bounded connect + response-header timeouts is used (the SSE body is
+	// never capped).
 	HTTPClient *http.Client
 	// EventBufferSize sets the channel buffer for streamed events. Default 64.
 	EventBufferSize int
+	// AllowInsecure permits a non-HTTPS BaseURL for a non-localhost host.
+	// Off by default; loopback hosts (localhost, 127.0.0.1, ::1) are always
+	// allowed over plain HTTP for local development.
+	AllowInsecure bool
 }
 
-// NewClient constructs a Client. BaseURL is required.
+// NewClient constructs a Client. BaseURL is required and its configuration is
+// validated here; any error (empty/invalid BaseURL, insecure transport to a
+// remote host, or a missing APIKey for a remote host) is surfaced from the
+// first Query call, keeping the constructor a single return value. When
+// HTTPClient is nil a client with bounded connect + response-header timeouts is
+// installed that deliberately does not cap the long-lived SSE response body.
 func NewClient(opts ClientOptions) *Client {
 	if opts.HTTPClient == nil {
-		opts.HTTPClient = http.DefaultClient
+		opts.HTTPClient = defaultHTTPClient()
 	}
 	bs := opts.EventBufferSize
 	if bs <= 0 {
@@ -45,7 +63,69 @@ func NewClient(opts ClientOptions) *Client {
 		hc:      opts.HTTPClient,
 		apiKey:  opts.APIKey,
 		bufSize: bs,
+		initErr: validateConfig(opts),
 	}
+}
+
+// defaultHTTPClient bounds connection setup and time-to-first-byte without
+// capping the long-lived SSE body: it sets a DialContext timeout and
+// ResponseHeaderTimeout on the transport and deliberately leaves
+// http.Client.Timeout unset (that would abort an open stream).
+func defaultHTTPClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   10 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
+	}
+}
+
+// validateConfig rejects an empty, unparseable, or non-absolute BaseURL, then
+// checks transport + credential posture.
+func validateConfig(opts ClientOptions) error {
+	if opts.BaseURL == "" {
+		return errors.New("trix: BaseURL is required")
+	}
+	u, err := url.Parse(opts.BaseURL)
+	if err != nil {
+		return fmt.Errorf("trix: invalid BaseURL %q: %w", opts.BaseURL, err)
+	}
+	if !u.IsAbs() || u.Host == "" {
+		return fmt.Errorf("trix: BaseURL must be an absolute URL, got %q", opts.BaseURL)
+	}
+	return validatePosture(u, opts)
+}
+
+// validatePosture forbids plain HTTP to a remote host (unless AllowInsecure)
+// and an empty APIKey to a remote host (which would hit the API unauthenticated).
+func validatePosture(u *url.URL, opts ClientOptions) error {
+	local := isLocalHost(u.Hostname())
+	if u.Scheme != "https" && !local && !opts.AllowInsecure {
+		return fmt.Errorf("trix: refusing non-HTTPS BaseURL %q for remote host (set AllowInsecure to override)", opts.BaseURL)
+	}
+	if opts.APIKey == "" && !local {
+		return fmt.Errorf("trix: APIKey is required for non-localhost BaseURL %q", opts.BaseURL)
+	}
+	return nil
+}
+
+// isLocalHost reports whether host is a loopback name/address, for which
+// insecure transport and anonymous access are tolerated (local development).
+func isLocalHost(host string) bool {
+	switch host {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
 }
 
 // QueryOptions mirrors trix-bots/src/sdk/query.ts QueryOptions.
@@ -64,6 +144,9 @@ type QueryOptions struct {
 // `errCh` receives at most one error. If the request fails to open it is
 // returned synchronously; mid-stream errors arrive on errCh asynchronously.
 func (c *Client) Query(ctx context.Context, opts QueryOptions) (<-chan StreamEvent, <-chan error, error) {
+	if c.initErr != nil {
+		return nil, nil, c.initErr
+	}
 	body, err := json.Marshal(opts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal QueryOptions: %w", err)
