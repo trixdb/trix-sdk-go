@@ -7,12 +7,14 @@ event surface.
 ## Quick start
 
 ```go
-import "github.com/devghost/trix-sdk-go/agent"
+import "github.com/trixdb/trix-sdk-go/agent"
 
 c := agent.NewClient(agent.ClientOptions{
     BaseURL: "http://localhost:3739",
 })
-events, err := c.Query(ctx, agent.QueryOptions{
+// Query returns three values: the event channel, an error channel, and a
+// synchronous error (bad config, or the request failed to open).
+events, errs, err := c.Query(ctx, agent.QueryOptions{
     SessionID: "sess-1",
     SpaceID:   "space-A",
     UserText:  "hello",
@@ -25,8 +27,15 @@ for ev := range events {
     case agent.EventTypeMemoryCited:
         fmt.Printf("[cited %s]\n", ev.MemoryCited.MemoryID)
     case agent.EventTypeStop:
-        return nil
+        // stream is ending; the events channel closes next
     }
+}
+// Once events is drained, surface any mid-stream error (non-blocking:
+// errs stays open on success).
+select {
+case err := <-errs:
+    if err != nil { return err }
+default:
 }
 ```
 
