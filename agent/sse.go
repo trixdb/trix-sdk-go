@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strconv"
 	"strings"
@@ -15,6 +16,11 @@ type SSEFrame struct {
 	Event string
 	Data  string
 }
+
+// maxFrameDataBytes caps the total size of one frame's accumulated `data:`
+// lines, bounding the memory a hostile/buggy server can force the client to
+// buffer (the scanner already caps a single line at 1 MiB).
+const maxFrameDataBytes = 8 << 20 // 8 MiB
 
 // ReadSSEFrames consumes an SSE stream from `r` and returns frames via `out`.
 // Closes `out` when the reader yields io.EOF or any other error.
@@ -53,6 +59,9 @@ func ReadSSEFrames(r io.Reader, out chan<- SSEFrame) error {
 		case strings.HasPrefix(line, "data:"):
 			// Per spec, multiple data: lines are joined with newline.
 			body := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if len(cur.Data)+len(body)+1 > maxFrameDataBytes {
+				return fmt.Errorf("sse frame exceeds %d bytes", maxFrameDataBytes)
+			}
 			if cur.Data == "" {
 				cur.Data = body
 			} else {

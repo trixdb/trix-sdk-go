@@ -168,7 +168,8 @@ func (c *Client) Query(ctx context.Context, opts QueryOptions) (<-chan StreamEve
 		return nil, nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
+		// Bound the error body so a hostile/huge response can't OOM the client.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10)) // 64 KiB
 		_ = resp.Body.Close()
 		return nil, nil, fmt.Errorf("agent run failed: %s — %s", resp.Status, string(body))
 	}
