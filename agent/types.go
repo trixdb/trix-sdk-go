@@ -61,6 +61,13 @@ type AssistantMessageRef struct {
 type StreamEvent struct {
 	Type EventType `json:"type"`
 
+	// ID is the SSE event id from the frame's `id:` line — the resume cursor,
+	// not part of the JSON payload (the custom Marshal/Unmarshal never touch it).
+	// Track the last non-zero ID you receive and pass it back as
+	// QueryOptions.LastEventID to resume after a dropped stream. Zero means the
+	// frame carried no id.
+	ID int64 `json:"-"`
+
 	// Mutually-exclusive payloads. Exactly one is non-nil per event.
 	MessageStart       *MessageStartPayload       `json:"-"`
 	ContentDelta       *ContentDeltaPayload       `json:"-"`

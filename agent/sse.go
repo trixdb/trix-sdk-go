@@ -79,9 +79,17 @@ func ReadSSEFrames(r io.Reader, out chan<- SSEFrame) error {
 	return nil
 }
 
-// DecodeFrameToEvent converts an SSEFrame's data field into a typed StreamEvent.
+// DecodeFrameToEvent converts an SSEFrame's data field into a typed StreamEvent
+// and carries the frame's `id:` through onto StreamEvent.ID (the resume cursor),
+// so a caller can learn where to resume from. A frame with no id (sentinel -1)
+// leaves ID at its zero value.
 func DecodeFrameToEvent(frame SSEFrame) (StreamEvent, error) {
 	var ev StreamEvent
-	err := json.Unmarshal([]byte(frame.Data), &ev)
-	return ev, err
+	if err := json.Unmarshal([]byte(frame.Data), &ev); err != nil {
+		return ev, err
+	}
+	if frame.ID >= 0 {
+		ev.ID = frame.ID
+	}
+	return ev, nil
 }

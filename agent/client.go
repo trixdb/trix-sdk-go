@@ -134,7 +134,9 @@ type QueryOptions struct {
 	SpaceID   string `json:"spaceId,omitempty"`
 	Model     string `json:"model,omitempty"`
 	UserText  string `json:"userText,omitempty"`
-	// LastEventID enables SSE resume.
+	// LastEventID enables SSE resume: set it to the ID of the last StreamEvent
+	// you received (see StreamEvent.ID) and the server replays only events after
+	// it. Sent as the `Last-Event-ID` header; omitted when <= 0.
 	LastEventID int64 `json:"-"`
 }
 
