@@ -8,14 +8,15 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
 )
 
 // Client is the consumer-facing handle for issuing Query() calls.
 type Client struct {
-	baseURL  string
-	hc       *http.Client
-	apiKey   string
-	bufSize  int
+	baseURL string
+	hc      *http.Client
+	apiKey  string
+	bufSize int
 }
 
 // ClientOptions configures a Client.
@@ -88,32 +89,85 @@ func (c *Client) Query(ctx context.Context, opts QueryOptions) (<-chan StreamEve
 		_ = resp.Body.Close()
 		return nil, nil, fmt.Errorf("agent run failed: %s — %s", resp.Status, string(body))
 	}
-	return c.streamFrom(resp.Body)
+	return c.streamFrom(ctx, resp.Body)
 }
 
-// streamFrom is the test seam: feed any io.ReadCloser shaped like an SSE response.
-func (c *Client) streamFrom(body io.ReadCloser) (<-chan StreamEvent, <-chan error, error) {
+// streamFrom is the test seam: feed any io.ReadCloser shaped like an SSE
+// response. It owns `body` and guarantees it is closed on every exit path —
+// normal EOF, decode error, or ctx cancellation — reclaiming both worker
+// goroutines and the underlying connection.
+func (c *Client) streamFrom(ctx context.Context, body io.ReadCloser) (<-chan StreamEvent, <-chan error, error) {
 	events := make(chan StreamEvent, c.bufSize)
-	errs := make(chan error, 1)
+	// Buffered for two potential senders (reader + decoder); sends are also
+	// non-blocking so neither goroutine can ever wedge on errs.
+	errs := make(chan error, 2)
 	frames := make(chan SSEFrame, c.bufSize)
-	// Reader goroutine
-	go func() {
-		defer body.Close()
-		if err := ReadSSEFrames(body, frames); err != nil {
-			errs <- err
-		}
-	}()
-	// Decoder goroutine
-	go func() {
-		defer close(events)
-		for frame := range frames {
-			ev, err := DecodeFrameToEvent(frame)
-			if err != nil {
-				errs <- fmt.Errorf("decode frame %d: %w", frame.ID, err)
-				return
-			}
-			events <- ev
-		}
-	}()
+
+	var once sync.Once
+	closeBody := func() { once.Do(func() { _ = body.Close() }) }
+	stop := make(chan struct{})
+
+	go watchCancel(ctx, stop, closeBody)
+	go readFrames(body, frames, errs, stop, closeBody)
+	go decodeFrames(ctx, frames, events, errs, closeBody)
 	return events, errs, nil
+}
+
+// watchCancel closes the body when ctx is cancelled, unblocking any Read so the
+// reader can finish. It exits once the reader signals completion via `stop`.
+func watchCancel(ctx context.Context, stop <-chan struct{}, closeBody func()) {
+	select {
+	case <-ctx.Done():
+		closeBody()
+	case <-stop:
+	}
+}
+
+// readFrames parses SSE frames from body into `frames` (ReadSSEFrames closes
+// `frames` on return), then signals `stop` and closes the body.
+func readFrames(body io.ReadCloser, frames chan<- SSEFrame, errs chan<- error, stop chan<- struct{}, closeBody func()) {
+	defer closeBody()
+	defer close(stop)
+	if err := ReadSSEFrames(body, frames); err != nil {
+		trySendErr(errs, err)
+	}
+}
+
+// decodeFrames turns frames into typed events. Every send selects on ctx so a
+// vanished consumer cannot pin the goroutine; on any early exit it closes the
+// body and drains `frames` so the reader can finish instead of blocking on send.
+func decodeFrames(ctx context.Context, frames <-chan SSEFrame, events chan<- StreamEvent, errs chan<- error, closeBody func()) {
+	defer close(events)
+	for frame := range frames {
+		ev, err := DecodeFrameToEvent(frame)
+		if err != nil {
+			trySendErr(errs, fmt.Errorf("decode frame %d: %w", frame.ID, err))
+			closeBody()
+			discardFrames(frames)
+			return
+		}
+		select {
+		case events <- ev:
+		case <-ctx.Done():
+			closeBody()
+			discardFrames(frames)
+			return
+		}
+	}
+}
+
+// trySendErr delivers err without ever blocking. errs is buffered for both
+// possible senders, so a full buffer just means an error is already in flight.
+func trySendErr(errs chan<- error, err error) {
+	select {
+	case errs <- err:
+	default:
+	}
+}
+
+// discardFrames drops remaining frames so the reader goroutine can run to
+// completion (close body, close frames) rather than blocking on a send.
+func discardFrames(frames <-chan SSEFrame) {
+	for range frames {
+	}
 }
