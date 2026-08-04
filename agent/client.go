@@ -170,10 +170,17 @@ func (c *Client) Query(ctx context.Context, opts QueryOptions) (<-chan StreamEve
 		return nil, nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// Bound the error body so a hostile/huge response can't OOM the client.
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10)) // 64 KiB
+		// newAPIError bounds the body read so a hostile/huge response can't OOM
+		// the client, and returns a typed *APIError carrying the status code.
+		return nil, nil, newAPIError(resp)
+	}
+	if ct := resp.Header.Get("Content-Type"); !isEventStream(ct) {
+		// A 2xx that isn't an event stream (proxy HTML page, JSON error served
+		// with 200, captive portal) parses to zero frames and would otherwise
+		// look like an empty-but-successful run. Fail loudly instead.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
 		_ = resp.Body.Close()
-		return nil, nil, fmt.Errorf("agent run failed: %s — %s", resp.Status, string(body))
+		return nil, nil, fmt.Errorf("%w: got %q", ErrNotEventStream, ct)
 	}
 	return c.streamFrom(ctx, resp.Body)
 }
