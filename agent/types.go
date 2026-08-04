@@ -182,9 +182,20 @@ type BudgetStatePayload struct {
 	Pct   float64     `json:"pct"`
 }
 
+// BudgetRemaining mirrors the optional `remaining` object on a budget_warning
+// event — TS `{ tokens?: number; usd?: number }`. Both fields are pointers so
+// an *unspecified* value (absent on the wire) stays distinct from a real zero
+// (budget exhausted). This is deliberately not BudgetSpent, whose fields are
+// always present on a budget_state event; conflating the two would report
+// "0 tokens / $0 remaining" for a warning that actually reported neither.
+type BudgetRemaining struct {
+	Tokens *int     `json:"tokens,omitempty"`
+	USD    *float64 `json:"usd,omitempty"`
+}
+
 // BudgetWarningPayload mirrors the TS budget_warning event.
 type BudgetWarningPayload struct {
-	Remaining BudgetSpent `json:"remaining"`
+	Remaining BudgetRemaining `json:"remaining"`
 }
 
 // CacheReportPayload mirrors the TS cache_report event.
