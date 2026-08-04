@@ -128,12 +128,16 @@ func isLocalHost(host string) bool {
 	return false
 }
 
-// QueryOptions mirrors trix-bots/src/sdk/query.ts QueryOptions.
+// QueryOptions mirrors the wire body of POST /v1/agent/run (the documented
+// RUN_BODY_SCHEMA fields of trix-api's agent-sdk route).
 type QueryOptions struct {
 	SessionID string `json:"sessionId,omitempty"`
 	SpaceID   string `json:"spaceId,omitempty"`
 	Model     string `json:"model,omitempty"`
 	UserText  string `json:"userText,omitempty"`
+	// SystemPrompt is the system-prompt block(s) for the run — the wire field
+	// `systemPrompt` (a JSON array of strings). Omitted when empty.
+	SystemPrompt []string `json:"systemPrompt,omitempty"`
 	// LastEventID enables SSE resume: set it to the ID of the last StreamEvent
 	// you received (see StreamEvent.ID) and the server replays only events after
 	// it. Sent as the `Last-Event-ID` header; omitted when <= 0.
