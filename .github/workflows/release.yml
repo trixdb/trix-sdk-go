@@ -1,0 +1,37 @@
+name: Release
+
+# A public Go module is versioned by git tags: `go get` resolves a version by
+# reading `vX.Y.Z` tags. Push a semver tag (e.g. `git tag v0.1.0 && git push
+# origin v0.1.0`) and this workflow verifies the tree and cuts a GitHub release.
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Verify
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Not gofmt-clean:"; echo "$unformatted"; exit 1
+          fi
+          go vet ./...
+          go build ./...
+          go test ./...
+          go test -race ./...
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" --generate-notes --verify-tag
